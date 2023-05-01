@@ -1,0 +1,475 @@
+/*:
+ * @target MZ
+ * @plugindesc 即时地图自走战斗
+ * @author 神仙狼
+ *
+ * @help 即时地图自走战斗\Automatic combat on map
+ *
+ * 此插件拥有一套关于地图自走战斗的即时模板，您可以根据实际需要来改动并使用。
+ * This plugin has a set of templates for automatic combat on maps that you can 
+ * modify and use according to your actual needs.
+ * 
+ * 本插件允许二次改动，但需要标注原作者名称。
+ * The plugin allows for secondary modifications, 
+ * but you have to mark the original author's name.
+ * 
+ * 使用说明：
+ * 
+ * 在事件界面备注：<enemy:1>
+ * 【重点！】并将事件运行方式改为并行处理
+ * 
+ * 事件分支这样写：$gameMap.event(this.eventId())._battler
+ * 可以判定是否在游戏状态。
+ * 
+ * 事件分支这样写：$gameMap.event(this.eventId())._battler._hp<=0
+ * 可以判定目标血量。
+ * 
+ * 脚本内容这样写：if($gameMap.event(1)._battler) $gameMap.event(this.eventId()).battlerTarget = $gameMap.event(1);
+ * 可以使目标为事件
+ * 
+ * 在数据库界面备注：<attackDistance:1>
+ * 若不备注默认为1
+ */
+var mz_tp_mapbattle = mz_tp_mapbattle || {};
+
+
+mz_tp_mapbattle.convertPartyBattlerId = function( id ){
+    if(id>=0){
+        return $gameParty.members()[id+1];
+    }else if (id == -1){
+        return $gameParty.members()[0];
+    }
+}
+
+mz_tp_mapbattle.isStuned = function( target ){
+    for(let state of target.states()){
+        if(state.restriction == 4) return true;
+    };
+}
+
+mz_tp_mapbattle.distance = function( a, b){
+    return $gameMap.distance(a.x,a.y,b.x,b.y)
+}
+
+let _mztp_map_onMapLoaded = Scene_Map.prototype.onMapLoaded
+Scene_Map.prototype.onMapLoaded = function() {
+    _mztp_map_onMapLoaded.call(this);
+    //清空伤害数字文本
+    mz_tp_mapbattle.damageText = [];
+};
+
+let _mztp_map_update = Scene_Map.prototype.update;
+Scene_Map.prototype.update = function() {
+    _mztp_map_update.call(this);
+    mz_tp_mapbattle.enemyEvents = this.enemyEvents;
+    if(this.enemyEvents==undefined){
+        this.enemyEvents = [];
+        this.followerBattlers = [];
+    }
+    for(let i = 0 ; i < mz_tp_mapbattle.damageText.length ; i++){
+        let text = mz_tp_mapbattle.damageText[i];
+        if(mz_tp_mapbattle.damageText[i]){
+            text.x = text.target.screenX()-100;
+            text.y = text.target.screenY()-128+(text.opacity)/5;
+            text.opacity-=5; 
+        }
+        if(mz_tp_mapbattle.damageText[i] && mz_tp_mapbattle.damageText[i].opacity<=0){
+            this.removeChild(text);
+            mz_tp_mapbattle.damageText.splice(i,1);
+        }
+    };
+    //加载事件与角色战斗数据
+    //敌人
+    for(let event of $gameMap.events()){
+        if(event.event().meta.enemy&&!event._battler){
+            event._battler = new Game_Enemy(event.event().meta.enemy);
+            //读取释放距离
+            if($dataEnemies[event.event().meta.enemy] && $dataEnemies[event.event().meta.enemy].meta.attackDistance){
+                event.attackDistance = Number($dataEnemies[event.event().meta.enemy].meta.attackDistance);
+                event._battler.tgAmount = Math.random()*5;
+            }else{
+                event.attackDistance = 1;
+            }
+        }
+    };
+    //初始化角色数据
+    for(let i = 0 ; i < $gameParty.members().length ; i ++ ){
+        if(!$gameParty.members()[i].tgAmount){
+            $gameParty.members()[i].tgAmount = Math.random()*5;
+        }
+    }
+    //判定敌人ID
+    for(let i = 0 ; i < $gameMap.events().length ; i++){
+        //推入敌人事件的ID
+        if ($gameMap.events()[i]._battler && $gameMap.events()[i]._battler._hp >= 0 && this.enemyEvents.indexOf($gameMap.events()[i].eventId()) <= -1) {
+            this.enemyEvents.push($gameMap.events()[i].eventId());
+        };
+    };
+
+    //根据仇恨率排序
+    this.enemyEvents.sort(function(a, b){return $gameMap.event(b).tgAmount - $gameMap.event(a).tgAmount}); 
+
+    //敌人攻击频率
+    for(let i = 0 ; i < this.enemyEvents.length ; i ++){
+        if($gameMap.event(this.enemyEvents[i])._battler._tp<100){
+            $gameMap.event(this.enemyEvents[i])._battler._tp += $gameMap.event(this.enemyEvents[i])._battler.trg*100||1;
+        }
+    }
+    //角色攻击频率
+    for(let i = 0 ; i < $gameParty.members().length ; i ++){
+        if($gameParty.members()[i] && $gameParty.members()[i]._tp<100){
+            $gameParty.members()[i]._tp += $gameParty.members()[i].trg*100||1;
+        }
+    }
+    //判断跟随ID
+    for(let i = 0 ; i < $gamePlayer.followers()._data.length ; i++){
+        if(mz_tp_mapbattle.convertPartyBattlerId(i) && mz_tp_mapbattle.convertPartyBattlerId(i)._hp > 0 && this.followerBattlers.indexOf(i) <= -1){
+            this.followerBattlers.push(i);
+        }
+    }
+    //阵亡则删除（队友）
+    for(let i = 0 ; i < this.followerBattlers.length ; i++){
+        if(mz_tp_mapbattle.convertPartyBattlerId(this.followerBattlers[i]) && mz_tp_mapbattle.convertPartyBattlerId(this.followerBattlers[i])._hp <= 0){
+            this.followerBattlers.splice(i,1)
+        }
+    }
+
+    //阵亡则删除（敌人）
+    for(let i = 0 ; i < this.enemyEvents.length ; i++){
+        if($gameMap.event(this.enemyEvents[i])._battler._hp<=0){
+            this.enemyEvents.splice(i,1);
+        }
+    };
+    //推入0号角色
+    if($gameParty.members()[0] && this.followerBattlers.indexOf(-1) <= -1 && $gameParty.members()[0]._hp > 0){
+        this.followerBattlers.push(-1);
+    }
+    //根据仇恨率排序
+    this.followerBattlers.sort(function(a, b){return mz_tp_mapbattle.convertPartyBattlerId(b).tgAmount - mz_tp_mapbattle.convertPartyBattlerId(a).tgAmount}); 
+    
+    //敌人锁定目标对象
+    for(let i = 0 ; i < this.enemyEvents.length ; i++){
+        if($gameMap.event(this.enemyEvents[i])._battler && $gameMap.event(this.enemyEvents[i])._battler._tp <= 1||!$gameMap.event(this.enemyEvents[i]).battlerTarget){
+            // $gameMap.event(this.enemyEvents[i]).battlerTarget = this.followerBattlers[0]==-1?$gamePlayer:$gamePlayer.followers()._data[this.followerBattlers[0]];
+            // if(Math.random()<0.2 && this.followerBattlers[1]){
+            //     $gameMap.event(this.enemyEvents[i]).battlerTarget = this.followerBattlers[1]==-1?$gamePlayer:$gamePlayer.followers()._data[this.followerBattlers[1]];
+            // }
+            let random = this.followerBattlers[Math.floor(Math.random()*this.followerBattlers.length)]
+            if($gameMap.event(this.enemyEvents[i])._battler._tp>=100)  $gameMap.event(this.enemyEvents[i]).battlerTarget = random===-1?$gamePlayer:$gamePlayer.followers()._data[random];
+        }
+    };
+
+    //角色锁定目标对象
+    for(let i = 0 ; i < this.followerBattlers.length ; i++){
+        if(this.followerBattlers[i]==-1){
+            // $gamePlayer.battlerTarget = $gameMap.event(this.enemyEvents[0])
+            // if(Math.random()<(1/60) ){
+                if($gameParty.members()[0]._tp >= 100) $gamePlayer.battlerTarget = $gameMap.event(this.enemyEvents[Math.floor(Math.random()*this.enemyEvents.length)]);
+            // }
+        }else{
+            // $gamePlayer.followers()._data[this.followerBattlers[i]].battlerTarget = $gameMap.event(this.enemyEvents[0]);
+            // if(Math.random()<(1/60) ){
+                if($gameParty.members()[this.followerBattlers[i]+1]._tp >= 100) $gamePlayer.followers()._data[this.followerBattlers[i]].battlerTarget = $gameMap.event(this.enemyEvents[Math.floor(Math.random()*this.enemyEvents.length)]);
+            // }
+        }
+        
+    };
+
+    //敌人行为
+    for(let i = 0 ; i < this.enemyEvents.length ; i++){
+        let skillName;
+        if($gameMap.event(this.enemyEvents[i]).battlerTarget 
+            && $gameMap.event(this.enemyEvents[i])._battler
+            && $gameMap.event(this.enemyEvents[i])._battler._hp>0 
+            && !mz_tp_mapbattle.isStuned($gameMap.event(this.enemyEvents[i])._battler)){
+            if(!$gameMap.event(this.enemyEvents[i]).isMoving()){
+                if($gameMap.distance($gameMap.event(this.enemyEvents[i]).x, $gameMap.event(this.enemyEvents[i]).y, $gameMap.event(this.enemyEvents[i]).battlerTarget.x, $gameMap.event(this.enemyEvents[i]).battlerTarget.y) > $gameMap.event(this.enemyEvents[i]).attackDistance){
+                    $gameMap.event(this.enemyEvents[i]).moveStraight($gameMap.event(this.enemyEvents[i]).findDirectionTo($gameMap.event(this.enemyEvents[i]).battlerTarget.x, $gameMap.event(this.enemyEvents[i]).battlerTarget.y));
+                }
+                if($gameMap.distance($gameMap.event(this.enemyEvents[i]).x, $gameMap.event(this.enemyEvents[i]).y, $gameMap.event(this.enemyEvents[i]).battlerTarget.x, $gameMap.event(this.enemyEvents[i]).battlerTarget.y) < $gameMap.event(this.enemyEvents[i]).attackDistance){
+                    $gameMap.event(this.enemyEvents[i]).moveAwayFromCharacter($gameMap.event(this.enemyEvents[i]).battlerTarget);
+                }
+                // $gameMap.event(this.enemyEvents[i]).moveRandom()
+            }
+            if( $gameMap.distance($gameMap.event(this.enemyEvents[i]).x, $gameMap.event(this.enemyEvents[i]).y, $gameMap.event(this.enemyEvents[i]).battlerTarget.x, $gameMap.event(this.enemyEvents[i]).battlerTarget.y) == $gameMap.event(this.enemyEvents[i]).attackDistance
+                && $gameMap.event(this.enemyEvents[i])._battler._tp>=100){ 
+                $gameMap.event(this.enemyEvents[i]).turnTowardCharacter($gameMap.event(this.enemyEvents[i]).battlerTarget);
+                let action = new Game_Action( $gameMap.event(this.enemyEvents[i])._battler );
+                action._subjectEnemyIndex = $gameMap.event(this.enemyEvents[i]).eventId();
+                
+                if($gameMap.event(this.enemyEvents[i])._battler.addedSkills()){
+                    let random = $gameMap.event(this.enemyEvents[i])._battler.addedSkills()[Math.floor(Math.random()*$gameMap.event(this.enemyEvents[i])._battler.addedSkills().length)];
+                    if(random && $gameMap.event(this.enemyEvents[i])._battler._mp>=$dataSkills[random].mpCost){
+                        $gameMap.event(this.enemyEvents[i])._battler._mp-=$dataSkills[random].mpCost;
+                        action.setItemObject($dataSkills[random]);
+                        skillName = $dataSkills[random].name;
+                    }else{
+                        action.setItemObject($dataSkills[$gameMap.event(this.enemyEvents[i])._battler.attackSkillId()]);
+                        skillName = $dataSkills[$gameMap.event(this.enemyEvents[i])._battler.attackSkillId()].name;
+                    }
+                }
+                //产生伤害数字
+                let text_skill = new Sprite(new Bitmap(200,100));
+                text_skill.bitmap.fontSize = 22;
+                text_skill.bitmap.drawText(skillName+'!',0,0,200,100,'center');
+                text_skill.target = $gameMap.event(this.enemyEvents[i]);
+                text_skill.x = text_skill.target.screenX();
+                text_skill.y = text_skill.target.screenY();
+                mz_tp_mapbattle.damageText.push(text_skill);
+                this.addChild(text_skill)
+                if($gameMap.event(this.enemyEvents[i]).battlerTarget._battler){
+                    action.apply($gameMap.event(this.enemyEvents[i]).battlerTarget._battler);
+                }else{
+                    action.apply($gameParty.members()[$gameMap.event(this.enemyEvents[i]).battlerTarget.memberIndex]);
+                }
+                
+                //产生伤害数字
+                let text = new Sprite(new Bitmap(200,100));
+                text.bitmap.fontSize = 22;
+                if($gameMap.event(this.enemyEvents[i]).battlerTarget._battler){
+                    text.bitmap.drawText($gameMap.event(this.enemyEvents[i]).battlerTarget._battler.result().hpDamage,0,0,200,100,'center');
+                    
+                }else{
+                    text.bitmap.drawText($gameParty.members()[$gameMap.event(this.enemyEvents[i]).battlerTarget.memberIndex].result().hpDamage,0,0,200,100,'center');
+                }
+                text.target = $gameMap.event(this.enemyEvents[i]).battlerTarget;
+                text.x = text.target.screenX();
+                text.y = text.target.screenY();
+                mz_tp_mapbattle.damageText.push(text);
+                this.addChild(text)
+                let animId=1;
+                if(action._item._dataClass == 'skill'){
+                    animId = $dataSkills[action._item._itemId].animationId;
+                }
+                if(action._item._dataClass == 'item'){
+                    animId = $dataItems[action._item._itemId].animationId;
+                }
+                $gameTemp.requestAnimation([$gameMap.event(this.enemyEvents[i]).battlerTarget],animId); 
+                $gameMap.event(this.enemyEvents[i]).battlerTarget.jump(0,0);
+                $gameMap.event(this.enemyEvents[i]).battlerTarget.tgAmount+=$gameMap.event(this.enemyEvents[i]).battlerTarget.tgr;
+                $gameMap.event(this.enemyEvents[i]).battlerTarget.moveBackward();
+                $gameMap.event(this.enemyEvents[i])._battler._tp=0;
+            }
+        }
+    };
+    //队友行为
+    for(let i = 0 ; i < this.followerBattlers.length ; i++){
+        let theCharacter;
+        if(this.followerBattlers[i]>=0){
+            theCharacter = $gamePlayer.followers()._data[this.followerBattlers[i]];
+            theCharacter.memberIndex = this.followerBattlers[i]+1;
+        }else{
+            theCharacter = $gamePlayer;
+            theCharacter.memberIndex = 0;
+        }
+        //离队 有BUG
+        // if($gameParty.members()[theCharacter.memberIndex]._hp<=0){
+        //     $gameParty.removeActor(theCharacter.memberIndex);
+        // }
+        //读取角色攻击距离
+        if(mz_tp_mapbattle.convertPartyBattlerId(this.followerBattlers[i])){
+            if($dataActors[mz_tp_mapbattle.convertPartyBattlerId(this.followerBattlers[i])._actorId].meta.attackDistance){
+                theCharacter.attackDistance = Number($dataActors[mz_tp_mapbattle.convertPartyBattlerId(this.followerBattlers[i])._actorId].meta.attackDistance);
+            }else{
+                theCharacter.attackDistance = 1; 
+            }
+        }
+        if($gameParty.members()[theCharacter.memberIndex] 
+            && theCharacter.battlerTarget
+            && $gameParty.members()[theCharacter.memberIndex]._hp > 0
+            && !mz_tp_mapbattle.isStuned($gameParty.members()[theCharacter.memberIndex])){
+            $gameTemp.clearDestination();
+            if( !theCharacter.isMoving() && theCharacter != $gamePlayer && $gameMap.distance(theCharacter.x, theCharacter.y, $gamePlayer.x, $gamePlayer.y)<=1){
+                theCharacter.moveAwayFromCharacter($gamePlayer)
+            }
+            
+            if(!theCharacter.isMoving() ){
+                if($gameMap.distance(theCharacter.x, theCharacter.y, theCharacter.battlerTarget.x, theCharacter.battlerTarget.y) > theCharacter.attackDistance){
+                    theCharacter.moveTowardCharacter(theCharacter.battlerTarget);
+                }
+                if($gameMap.distance(theCharacter.x, theCharacter.y, theCharacter.battlerTarget.x, theCharacter.battlerTarget.y) < theCharacter.attackDistance){
+                    theCharacter.moveAwayFromCharacter(theCharacter.battlerTarget);
+                }
+            }
+            if(!theCharacter.isMoving() && theCharacter.canPass(theCharacter.x, theCharacter.y,theCharacter._direction)){
+                if($gameParty.members()[theCharacter.memberIndex]._tp<=10){
+
+                }
+            }
+            if( $gameMap.distance(theCharacter.x, theCharacter.y, theCharacter.battlerTarget.x, theCharacter.battlerTarget.y) == theCharacter.attackDistance 
+            && $gameParty.members()[theCharacter.memberIndex]._tp>=100){ 
+                theCharacter.turnTowardCharacter(theCharacter.battlerTarget);
+                let action = new Game_Action( $gameParty.members()[theCharacter.memberIndex] );
+                // action._subjectEnemyIndex = $gameMap.event(this.enemyEvents[i]).eventId();
+                let skills = [$dataSkills[$gameParty.members()[theCharacter.memberIndex].attackSkillId()]];
+                for(let i = 0 ; i < $gameParty.members()[theCharacter.memberIndex].skills().length ; i ++){
+                    skills.push($gameParty.members()[theCharacter.memberIndex].skills()[i]);
+                }
+                let randomSkill = skills[Math.floor(Math.random()*skills.length)];
+                //产生伤害数字
+                let text = new Sprite(new Bitmap(200,100));
+                text.bitmap.fontSize = 22;
+                text.bitmap.drawText(randomSkill.name+'!',0,0,200,100,'center');
+                text.target = theCharacter;
+                text.x = text.target.screenX();
+                text.y = text.target.screenY();
+                mz_tp_mapbattle.damageText.push(text);
+                this.addChild(text)
+                if(randomSkill && $gameParty.members()[theCharacter.memberIndex]._mp>=randomSkill.mpCost*$gameParty.members()[theCharacter.memberIndex].mcr){
+                    $gameParty.members()[theCharacter.memberIndex]._mp-=randomSkill.mpCost*$gameParty.members()[theCharacter.memberIndex].mcr;
+                    action.setItemObject(randomSkill);
+                }else{
+                    action.setItemObject($dataSkills[$gameParty.members()[theCharacter.memberIndex].attackSkillId()]);
+                }
+                if(action.isForFriend()){
+                    //为自己使用
+                    if(action.isForUser()){
+                        action.apply($gameParty.members()[theCharacter.memberIndex]);
+                        let animId=1;
+                        if(action._item._dataClass == 'skill'){
+                            animId = $dataSkills[action._item._itemId].animationId;
+                        }
+                        if(action._item._dataClass == 'item'){
+                            animId = $dataItems[action._item._itemId].animationId;
+                        }
+                        $gameTemp.requestAnimation([theCharacter],animId); 
+                    }
+                    //单个队友
+                    if(action.isForOne()){
+                        let randomTarget = Math.floor(Math.random()*$gameParty.battleMembers().length)
+                        action.apply($gameParty.members()[randomTarget]);
+                        let animId=1;
+                        if(action._item._dataClass == 'skill'){
+                            animId = $dataSkills[action._item._itemId].animationId;
+                        }
+                        if(action._item._dataClass == 'item'){
+                            animId = $dataItems[action._item._itemId].animationId;
+                        }
+                        if(randomTarget==0) $gameTemp.requestAnimation([$gamePlayer],animId); 
+                        if(randomTarget>0) $gameTemp.requestAnimation([$gamePlayer.followers()._data[randomTarget-1]],animId); 
+                    }
+                    //全体队友
+                    if(action.isForAll()){
+                        let animTarget = []
+                        for(let m = 0 ; m < $gameParty.battleMembers().length ; m ++){
+                            action.apply($gameParty.members()[m]);
+                            animTarget.push(m==0?$gamePlayer:$gamePlayer.followers()._data[m-1]);
+                        }
+                        let animId=1;
+                        if(action._item._dataClass == 'skill'){
+                            animId = $dataSkills[action._item._itemId].animationId;
+                        }
+                        if(action._item._dataClass == 'item'){
+                            animId = $dataItems[action._item._itemId].animationId;
+                        }
+                        $gameTemp.requestAnimation(animTarget,animId); 
+                    }
+
+                }
+                //为对手使用
+                if(action.isForOpponent()){
+                    action.apply(theCharacter.battlerTarget._battler);
+                    //产生伤害数字
+                    let text = new Sprite(new Bitmap(200,100));
+                    text.bitmap.fontSize = 22;
+                    text.bitmap.drawText(theCharacter.battlerTarget._battler.result().hpDamage,0,0,200,100,'center');
+                    text.target = theCharacter.battlerTarget;
+                    text.x = text.target.screenX();
+                    text.y = text.target.screenY();
+                    mz_tp_mapbattle.damageText.push(text);
+                    this.addChild(text)
+                    //溅射AOE
+                    // for(let e = 0 ; e < this.enemyEvents.length ; e++ ){
+                    //     if($gameMap.distance(theCharacter.battlerTarget.x, theCharacter.battlerTarget.y, $gameMap.event(this.enemyEvents[e]).x, $gameMap.event(this.enemyEvents[e]).y)<2){
+                    //         if( $gameMap.event(this.enemyEvents[e])._battler &&  $gameMap.event(this.enemyEvents[e])._battler._hp>0){
+                    //             action.apply($gameMap.event(this.enemyEvents[e])._battler);
+                    //             //产生伤害数字
+                    //             let text = new Sprite(new Bitmap(200,100));
+                    //             text.bitmap.fontSize = 22;
+                    //             text.bitmap.drawText($gameMap.event(this.enemyEvents[e])._battler.result().hpDamage,0,0,200,100,'center');
+                    //             text.target = $gameMap.event(this.enemyEvents[e]);
+                    //             text.x = text.target.screenX();
+                    //             text.y = text.target.screenY();
+                    //             mz_tp_mapbattle.damageText.push(text);
+                    //             this.addChild(text)
+                    //             $gameMap.event(this.enemyEvents[e]).jump(0,0);
+                    //             $gameMap.event(this.enemyEvents[e]).moveAwayFromCharacter(theCharacter);
+                    //         }
+                    //     }
+                    // }
+                    let animId=1;
+                    if(action._item._dataClass == 'skill'){
+                        animId = $dataSkills[action._item._itemId].animationId;
+                    }
+                    if(action._item._dataClass == 'item'){
+                        animId = $dataItems[action._item._itemId].animationId;
+                    }
+                    //动画及角色动作
+                    $gameTemp.requestAnimation([theCharacter.battlerTarget],animId); 
+                    theCharacter.jump(0,0);
+                    theCharacter.moveForward()
+                    theCharacter.jump(0,0);
+                    theCharacter.moveAwayFromCharacter(theCharacter.battlerTarget)
+                    theCharacter.battlerTarget.jump(0,0);
+                    theCharacter.turnTowardCharacter(theCharacter.battlerTarget);
+                    theCharacter.battlerTarget.moveAwayFromCharacter(theCharacter);
+                }
+                $gameParty.members()[theCharacter.memberIndex].tgAmount+=$gameParty.members()[theCharacter.memberIndex].tgr;
+                $gameParty.members()[theCharacter.memberIndex]._tp=0;
+            }
+        }
+        
+    };
+};
+
+//替换subject概念
+Game_Action.prototype.subject = function() {
+    if (this._subjectActorId > 0) {
+        return $gameActors.actor(this._subjectActorId);
+    } else {
+        return $gameMap.event(this._subjectEnemyIndex)._battler;
+    }
+};
+
+//跳跃不聚集
+Game_Player.prototype.jump = function(xPlus, yPlus) {
+    Game_Character.prototype.jump.call(this, xPlus, yPlus);
+    // this._followers.jumpAll();
+};
+
+//不跟随
+Game_Followers.prototype.updateMove = function() {
+    for (let i = this._data.length - 1; i >= 0; i--) {
+        const precedingCharacter = i > 0 ? this._data[i - 1] : $gamePlayer;
+        if(!this._data[i].battlerTarget && $gameParty.members()[this._data[i].memberIndex] && $gameParty.members()[this._data[i].memberIndex]._hp>0 ){
+            this._data[i].chaseCharacter(precedingCharacter);
+        }
+        this._data[i].setThrough(false);
+    }
+};
+
+SceneManager.changeScene = function() {
+    //清理套娃数据
+    if($gamePlayer){
+        for(let follower of $gamePlayer.followers()._data){
+            follower.battlerTarget = undefined;
+        }
+        $gameParty.battlerTarget = undefined;
+    }
+    
+    if (this.isSceneChanging() && !this.isCurrentSceneBusy()) {
+        if (this._scene) {
+            this._scene.terminate();
+            this.onSceneTerminate();
+        }
+        this._scene = this._nextScene;
+        this._nextScene = null;
+        if (this._scene) {
+            this._scene.create();
+            this.onSceneCreate();
+        }
+        if (this._exiting) {
+            this.terminate();
+        }
+    }
+};

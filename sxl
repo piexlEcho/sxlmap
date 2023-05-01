@@ -447,6 +447,7 @@ for (const event of $gameMap.events()) {
         team2Events.push(event.eventId());
     }
 }
+
 if ($gameMap.event(this.enemyEvents[i])._battler && $gameMap.event(this.enemyEvents[i])._battler._tp <= 1 || !$gameMap.event(this.enemyEvents[i]).battlerTarget) {
     let targets = [];
     if (team1Events.includes(this.enemyEvents[i])) {
@@ -462,6 +463,7 @@ if ($gameMap.event(this.enemyEvents[i])._battler && $gameMap.event(this.enemyEve
         $gameMap.event(this.enemyEvents[i]).battlerTarget = random === -1 ? $gamePlayer : $gamePlayer.followers()._data[random];
     }
 }
+
 
 //不跟随
 Game_Followers.prototype.updateMove = function() {

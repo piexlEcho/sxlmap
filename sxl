@@ -32,7 +32,6 @@
  */
 var mz_tp_mapbattle = mz_tp_mapbattle || {};
 
-
 mz_tp_mapbattle.convertPartyBattlerId = function( id ){
     if(id>=0){
         return $gameParty.members()[id+1];
@@ -436,6 +435,33 @@ Game_Player.prototype.jump = function(xPlus, yPlus) {
     Game_Character.prototype.jump.call(this, xPlus, yPlus);
     // this._followers.jumpAll();
 };
+
+const team1Events = [];
+const team2Events = [];
+
+for (const event of $gameMap.events()) {
+    const note = event.event().note.toLowerCase();
+    if (note.includes('<team:1>')) {
+        team1Events.push(event.eventId());
+    } else if (note.includes('<team:2>')) {
+        team2Events.push(event.eventId());
+    }
+}
+if ($gameMap.event(this.enemyEvents[i])._battler && $gameMap.event(this.enemyEvents[i])._battler._tp <= 1 || !$gameMap.event(this.enemyEvents[i]).battlerTarget) {
+    let targets = [];
+    if (team1Events.includes(this.enemyEvents[i])) {
+        targets = targets.concat(team2Events);
+    } else if (team2Events.includes(this.enemyEvents[i])) {
+        targets = targets.concat(team1Events);
+    }
+    const targetEventId = targets.filter(id => $gameMap.event(id)._battler && $gameMap.event(id)._battler.isAlive())[0];
+    if (targetEventId) {
+        $gameMap.event(this.enemyEvents[i]).battlerTarget = $gameMap.event(targetEventId);
+    } else {
+        const random = this.followerBattlers[Math.floor(Math.random() * this.followerBattlers.length)];
+        $gameMap.event(this.enemyEvents[i]).battlerTarget = random === -1 ? $gamePlayer : $gamePlayer.followers()._data[random];
+    }
+}
 
 //不跟随
 Game_Followers.prototype.updateMove = function() {
